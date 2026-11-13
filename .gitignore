@@ -1,0 +1,28 @@
+node_modules/
+dist
+.idea
+.DS_Store
+.eslintcache
+.nuxt
+.output
+auto-imports.d.ts
+components.d.ts
+playwright-report
+test-results
+
+# Vitepress
+docs/.vitepress/dist
+docs/.vitepress/cache
+docs/.vitepress/.temp
+
+.data
+
+# Agent skills from npm packages (managed by skills-npm)
+**/skills/npm-*
+
+# Coverage reports (pnpm test:coverage)
+coverage
+.vitest/
+
+# npm pack tarballs (pnpm test:attw)
+*.tgz

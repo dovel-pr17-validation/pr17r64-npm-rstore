@@ -1,0 +1,42 @@
+import type { Collection, CollectionDefaults, CustomHookMeta, FindOptions, GlobalStoreType, ResolvedCollection, StoreCore, StoreSchema } from '@rstore/shared'
+
+import { klona } from 'klona'
+
+/** Inputs for closing a subscription with its opening options. */
+export interface UnsubscribeOptions<
+  TCollection extends Collection,
+  TCollectionDefaults extends CollectionDefaults,
+  TSchema extends StoreSchema,
+> {
+  store: StoreCore<TSchema, TCollectionDefaults>
+  collection: ResolvedCollection<TCollection, TCollectionDefaults, TSchema>
+  subscriptionId: string
+  key?: string | number
+  findOptions?: FindOptions<TCollection, TCollectionDefaults, TSchema>
+  meta?: CustomHookMeta
+}
+
+/** Dispatch teardown without exposing the retained options to hook mutation. */
+export async function unsubscribe<
+  TCollection extends Collection,
+  TCollectionDefaults extends CollectionDefaults,
+  TSchema extends StoreSchema,
+>({
+  store,
+  collection,
+  subscriptionId,
+  key,
+  findOptions,
+  meta,
+}: UnsubscribeOptions<TCollection, TCollectionDefaults, TSchema>): Promise<void> {
+  meta ??= findOptions?.meta ?? {}
+
+  await store.$hooks.callHook('unsubscribe', {
+    store: store as unknown as GlobalStoreType,
+    meta,
+    collection,
+    subscriptionId,
+    key,
+    findOptions: klona(findOptions ?? {}),
+  })
+}

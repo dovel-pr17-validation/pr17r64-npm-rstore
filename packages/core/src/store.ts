@@ -1,0 +1,288 @@
+import type { Awaitable, BatchingConfig, Cache, CollectionDefaults, CustomHookMeta, FindOptions, GlobalStoreType, Hooks, MutationSpecialProps, Plugin, QueryFetchOptions, ResolvedCollection, RetentionOptions, StoreCore, StoreSchema } from '@rstore/shared'
+import { get, set } from '@rstore/shared'
+import { createBatchScheduler } from './batch'
+import { builtinCollectionHooksPlugin } from './builtin/collectionHooks'
+import { addCollectionRelations, isCollectionRelations, normalizeCollectionRelations, resolveCollectionOppositeRelations, resolveCollections } from './collection'
+import { defaultFetchPolicy } from './fetchPolicy'
+import { resolveMutationHistoryRetention } from './mutation/history'
+import { mutate } from './mutation/mutate'
+import { setupPlugin, sortPlugins } from './plugin'
+import { applyPluginCollectionDefaults } from './pluginCollectionDefaults'
+import { createSync, getLastSyncedAt } from './sync'
+
+export interface CreateStoreCoreOptions<
+  TSchema extends StoreSchema = StoreSchema,
+  TCollectionDefaults extends CollectionDefaults = CollectionDefaults,
+> {
+  cache: Cache
+  schema: TSchema
+  collectionDefaults?: TCollectionDefaults
+  plugins?: Array<Plugin>
+  hooks: Hooks<TSchema, TCollectionDefaults>
+  findDefaults?: Partial<FindOptions<any, any, any>>
+  isServer?: boolean
+  transformStore?: (store: StoreCore<TSchema, TCollectionDefaults>) => StoreCore<TSchema, TCollectionDefaults>
+  syncImmediately?: boolean
+
+  /**
+   * Enable operation batching. When enabled, multiple operations happening in the
+   * same tick are collected and dispatched as a single batch operation.
+   */
+  batching?: BatchingConfig
+
+  /**
+   * Bounds of `store.$mutationHistory`. Each entry retains its payload.
+   * `false` keeps every entry forever; `{ maxSize: 0 }` records nothing.
+   * @default { ttlMs: 600_000, maxSize: 20 }
+   */
+  mutationHistory?: false | RetentionOptions
+}
+
+const resolvedFindOptionsMarker = Symbol('resolvedFindOptions')
+const defaultResultMode = 'computed'
+
+/**
+ * Tells a promise-compatible value apart from a synchronous one.
+ *
+ * Structural on purpose: `value instanceof Promise` is false for a native
+ * promise built in another JS realm, such as a `node:vm` context, which is
+ * still a supported `Promise<void>` return.
+ *
+ * @param value Value to test, typically what a plugin's `setup` returned.
+ */
+function isThenable<T>(value: Awaitable<T>): value is Promise<T> {
+  return typeof (value as Promise<T> | undefined)?.then === 'function'
+}
+
+export async function createStoreCore<
+  TSchema extends StoreSchema = StoreSchema,
+  TCollectionDefaults extends CollectionDefaults = CollectionDefaults,
+>(options: CreateStoreCoreOptions<TSchema, TCollectionDefaults>): Promise<StoreCore<TSchema, TCollectionDefaults>> {
+  // Create store
+
+  const collections = resolveCollections(options.schema, options.collectionDefaults)
+
+  const optionPlugins = options.plugins ?? []
+  optionPlugins.unshift(builtinCollectionHooksPlugin)
+
+  let mutationHistoryRetention = resolveMutationHistoryRetention(options.mutationHistory)
+
+  let store: StoreCore<TSchema, TCollectionDefaults> = {
+    $cache: options.cache,
+    $collections: collections,
+    $collectionDefaults: options.collectionDefaults ?? {} as TCollectionDefaults,
+    $plugins: sortPlugins(optionPlugins.map(p => ({ ...p, hooks: {} }))),
+    $hooks: options.hooks,
+    $findDefaults: options.findDefaults ?? {},
+    $resolveFindOptions(collection, options, many, meta) {
+      if ((options as any)[resolvedFindOptionsMarker]) {
+        return options as any
+      }
+      const resolvedFetchOptions: QueryFetchOptions = {
+        ...store.$findDefaults.fetchOptions,
+        ...options.fetchOptions,
+        autoRefresh: options.fetchOptions?.autoRefresh ?? store.$findDefaults.fetchOptions?.autoRefresh ?? 'manual',
+      }
+      const resolvedOptions: FindOptions<any, any, any> = {
+        ...store.$findDefaults,
+        ...options,
+        fetchPolicy: options.fetchPolicy ?? store.$findDefaults.fetchPolicy ?? defaultFetchPolicy,
+        fetchOptions: resolvedFetchOptions,
+        resultMode: options.resultMode ?? store.$findDefaults.resultMode ?? defaultResultMode,
+      }
+      store.$hooks.callHookSync('resolveFindOptions', {
+        store: store as unknown as GlobalStoreType,
+        collection,
+        many,
+        meta,
+        findOptions: resolvedOptions,
+        updateFindOptions: (newFindOptions: any) => {
+          Object.assign(resolvedOptions, newFindOptions)
+        },
+      })
+      if (resolvedOptions.meta) {
+        Object.assign(meta, resolvedOptions.meta)
+      }
+      Object.defineProperty(resolvedOptions, resolvedFindOptionsMarker, {
+        value: true,
+        enumerable: false,
+      })
+      return resolvedOptions
+    },
+    $processItemParsing(collection, item) {
+      store.$hooks.callHookSync('parseItem', {
+        store: store as unknown as GlobalStoreType,
+        meta: {},
+        collection,
+        item,
+        modifyItem: (path, value) => {
+          set(item, path, value as any)
+        },
+      })
+    },
+    $processItemSerialization(collection, item) {
+      store.$hooks.callHookSync('serializeItem', {
+        store: store as unknown as GlobalStoreType,
+        meta: {},
+        collection,
+        item,
+        modifyItem: (path, value) => {
+          set(item, path, value as any)
+        },
+      })
+    },
+    $getCollection(item, collectionNames?) {
+      if (collectionNames?.length === 1) {
+        return store.$collections.find(m => m.name === collectionNames[0]) ?? null
+      }
+      if (typeof item?.$collection === 'string') {
+        const result = store.$collections.find(m => m.name === item.$collection)
+        if (result) {
+          return result
+        }
+      }
+      const collections = collectionNames ? store.$collections.filter(m => collectionNames?.includes(m.name)) : store.$collections
+      for (const collection of collections) {
+        if (collection.isInstanceOf(item)) {
+          return collection
+        }
+      }
+      return null
+    },
+    $mutationHistory: [],
+    get $mutationHistoryRetention() {
+      return mutationHistoryRetention
+    },
+    // Validate runtime assignments like the store option.
+    set $mutationHistoryRetention(value) {
+      mutationHistoryRetention = resolveMutationHistoryRetention(value)
+    },
+    $mutate(options, callback) {
+      return mutate(store, options, callback)
+    },
+    $isServer: options.isServer ?? false,
+    $dedupePromises: new Map(),
+    $registeredModules: new Map(),
+    $getModules: () => [...store.$registeredModules.values()],
+    $wrapMutation: mutation => mutation as typeof mutation & MutationSpecialProps,
+    $sync: createSync(() => store),
+    $syncState: {
+      isSyncing: false,
+      lastSyncAt: getLastSyncedAt(),
+      loadedCollections: new Set(),
+      syncedCollections: new Set(),
+    },
+  }
+
+  // Initialize batch scheduler if batching is enabled
+  if (options.batching) {
+    const batchOpts = typeof options.batching === 'object' ? options.batching : {}
+    store.$batch = createBatchScheduler(store, batchOpts)
+  }
+
+  for (const item of options.schema) {
+    if (isCollectionRelations(item)) {
+      addCollectionRelations(store, item)
+    }
+  }
+
+  normalizeCollectionRelations(store.$collections)
+  resolveCollectionOppositeRelations(store.$collections)
+
+  if (options.transformStore) {
+    store = options.transformStore(store)
+  }
+
+  // Setup plugins
+
+  // Sequential, and awaited only when a plugin's `setup` is actually async.
+  //
+  // `$plugins.forEach(...)` dropped the returned promise, so a rejecting
+  // `setup` never failed `createStore` (it surfaced as an unhandled rejection)
+  // and an `addCollectionDefaults` call made after an `await` landed too late
+  // for the merge below. Awaiting unconditionally is not the fix either: it
+  // would move every plugin after the first into a microtask, and a plugin
+  // whose `setup` is synchronous may rely on the caller's synchronous context
+  // (`useNuxtApp` in the Nuxt connectors).
+  for (const plugin of store.$plugins) {
+    const setupResult = setupPlugin(store, plugin)
+    if (isThenable(setupResult)) {
+      await setupResult
+    }
+  }
+
+  // Plugins run after collection resolution. Refresh only default-derived
+  // properties while retaining collection and relation object identities.
+  applyPluginCollectionDefaults(store.$collections, options.schema, store.$collectionDefaults)
+
+  // Init store hook
+
+  const meta: CustomHookMeta = {}
+
+  await store.$hooks.callHook('init', {
+    store: store as unknown as GlobalStoreType,
+    meta,
+  })
+
+  // Collection hooks
+
+  store.$hooks.hook('parseItem', (payload) => {
+    if (payload.collection.fields) {
+      for (const path in payload.collection.fields) {
+        const fieldConfig = payload.collection.fields[path]!
+        if (fieldConfig.parse) {
+          const value = get(payload.item, path as any)
+          if (value != null) {
+            payload.modifyItem(path as any, fieldConfig.parse(value))
+          }
+        }
+      }
+    }
+
+    for (const key in payload.item) {
+      if (key in payload.collection.relations) {
+        const value = payload.item[key]
+        if (value) {
+          if (Array.isArray(value)) {
+            for (const child of value as any[]) {
+              parseNestedItem(payload.collection, key, child)
+            }
+          }
+          else {
+            parseNestedItem(payload.collection, key, value)
+          }
+        }
+      }
+    }
+  })
+
+  function parseNestedItem(parentCollection: ResolvedCollection, key: string, child: any) {
+    const relation = parentCollection.relations![key]!
+    const possibleCollections = Object.keys(relation.to)
+    const childCollection = store.$getCollection(child, possibleCollections)
+    if (!childCollection) {
+      throw new Error(`Could not determine for relation ${parentCollection.name}.${String(key)}`)
+    }
+    store.$processItemParsing(childCollection, child)
+  }
+
+  store.$hooks.hook('serializeItem', (payload) => {
+    if (payload.collection.fields) {
+      for (const path in payload.collection.fields) {
+        const fieldConfig = payload.collection.fields[path]!
+        if (fieldConfig.serialize) {
+          const value = get(payload.item, path as any)
+          if (value != null) {
+            payload.modifyItem(path as any, fieldConfig.serialize(value))
+          }
+        }
+      }
+    }
+  })
+
+  if (!store.$isServer && (options.syncImmediately ?? true)) {
+    store.$sync()
+  }
+
+  return store
+}

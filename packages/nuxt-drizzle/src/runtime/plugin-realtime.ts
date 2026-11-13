@@ -1,0 +1,278 @@
+import type { FieldTimestampValue } from '@rstore/shared'
+import type { InitAckMessage, InitErrorMessage, SubscriptionRejectedMessage, SubscriptionUpdateMessage } from './utils/realtime'
+// @ts-expect-error virtual module
+import { scopeId as drizzleScopeId, wsAutoReconnect, wsClientEndpoint, wsHeartbeatInterval } from '#build/$rstore-drizzle-config.js'
+import { compareHLC } from '@rstore/core'
+import { definePlugin, realtimeReconnectEventHook } from '@rstore/vue'
+import { useWebSocket } from '@vueuse/core'
+import { watch } from 'vue'
+import { getRstoreDrizzleClientId } from './utils/client-id'
+import { RSTORE_DRIZZLE_PROTOCOL_VERSION } from './utils/realtime'
+import { createRealtimeReadyGate } from './utils/realtime-ready'
+import { maxPayloadStamp, stampToDate } from './utils/realtime-stamps'
+import { createRealtimeSubscriptions } from './utils/realtime-subscriptions'
+
+export default definePlugin({
+  name: 'rstore-drizzle-realtime',
+
+  category: 'remote',
+
+  scopeId: drizzleScopeId,
+
+  setup({ hook }) {
+    if (import.meta.client) {
+      const clientId = getRstoreDrizzleClientId()
+
+      // Highest HLC seen per collection. Used as `lastUpdatedAt` for the
+      // `syncCollection` hook on reconnect so only missed rows flow back.
+      const lastStampPerCollection = new Map<string, FieldTimestampValue>()
+
+      const ws = useWebSocket(wsClientEndpoint, {
+        heartbeat: {
+          interval: wsHeartbeatInterval,
+        },
+        autoReconnect: wsAutoReconnect,
+      })
+
+      let connectCount = 0
+      // The gate resolves once the server has ack'd the init frame (or
+      // bound our clientId from the upgrade header). Mutations issued via
+      // `beforeMutation` await it so our own echoes are reliably suppressed
+      // for the originating tab. It always settles — on ack, on handshake
+      // failure, or after a timeout — so a broken handshake (proxy strips
+      // the upgrade, endpoint down) degrades to "no echo suppression"
+      // instead of hanging every mutation forever.
+      const readyGate = createRealtimeReadyGate({
+        onTimeout: () => {
+          console.warn('[Realtime] Timed out waiting for the realtime handshake — mutations will proceed without echo suppression.')
+        },
+      })
+
+      hook('beforeMutation', async () => {
+        // Offline: skip the realtime-ready wait — the socket will never
+        // handshake without a network, and awaiting it forever would block
+        // offline plugins (e.g. @rstore/offline) from queueing the mutation.
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          return
+        }
+        // Block mutations until we know the server has our clientId.
+        await readyGate.wait()
+      })
+
+      // Ref-counted: one wire subscription per topic, however many local
+      // subscribers share it.
+      const subscriptions = createRealtimeSubscriptions((message) => {
+        ws.send(JSON.stringify({
+          subscription: message,
+        }), false)
+      })
+
+      // rstore resolves defaults and hook transforms before subscribe, then
+      // retains those options for unsubscribe so both use the same wire topic.
+      hook('subscribe', ({ collection, key, findOptions, subscriptionId, end }) => {
+        subscriptions.subscribe({ collection: collection.name, key, where: findOptions?.where }, { id: subscriptionId, end })
+      })
+
+      hook('unsubscribe', ({ collection, key, findOptions, subscriptionId }) => {
+        subscriptions.unsubscribe({ collection: collection.name, key, where: findOptions?.where }, subscriptionId)
+      })
+
+      let storeRef: any = null
+
+      hook('init', ({ store }) => {
+        storeRef = store
+
+        function applyUpdate(u: SubscriptionUpdateMessage) {
+          const collection = store.$collections.find(c => c.name === u.collection)
+          if (!collection) {
+            throw new Error(`Collection ${u.collection} not found`)
+          }
+
+          const stamp = maxPayloadStamp(u)
+          if (stamp !== undefined) {
+            const prev = lastStampPerCollection.get(collection.name)
+            if (prev === undefined || compareHLC(stamp, prev) > 0) {
+              lastStampPerCollection.set(collection.name, stamp)
+            }
+          }
+
+          switch (u.type) {
+            case 'created':
+            case 'updated': {
+              const key = collection.getKey(u.record)
+              if (key == null) {
+                throw new Error(`Key not found for collection ${collection.name}`)
+              }
+              store.$cache.writeItem({
+                collection,
+                key,
+                item: u.record,
+                fieldTimestamps: u.fieldTimestamps,
+              })
+              break
+            }
+            case 'deleted': {
+              const key = u.key
+              if (key == null) {
+                throw new Error(`Key not found for collection ${collection.name}`)
+              }
+              store.$cache.deleteItem({
+                collection,
+                key,
+                deletedAt: u.deletedAt,
+              })
+            }
+          }
+        }
+
+        watch(ws.data, async (data) => {
+          if (typeof data !== 'string' || data === 'pong') {
+            return
+          }
+          try {
+            const message = JSON.parse(data) as {
+              update?: SubscriptionUpdateMessage
+              updates?: SubscriptionUpdateMessage[]
+              init?: InitAckMessage | InitErrorMessage
+              subscription?: SubscriptionRejectedMessage
+            }
+            if (message.init?.ok === true) {
+              readyGate.markReady()
+              return
+            }
+            if (message.init && message.init.ok === false) {
+              // Server refused the handshake (e.g. the client is too new
+              // for this server). Surface a loud error and stop trying
+              // to reconnect — auto-retrying would just loop forever.
+              console.error(
+                '[Realtime] Server rejected handshake:',
+                message.init.error,
+                `(server v=${message.init.v}, client v=${RSTORE_DRIZZLE_PROTOCOL_VERSION})`,
+              )
+              // Permanently settle the gate: realtime is down for good, so
+              // mutations must proceed (without echo suppression) instead of
+              // hanging — and the close below must not re-arm the gate.
+              readyGate.disable()
+              ws.close()
+              return
+            }
+            if (message.subscription?.action === 'rejected') {
+              subscriptions.reject(message.subscription, message.subscription.reason)
+              console.warn(
+                '[Realtime] Subscription rejected by server',
+                message.subscription.collection,
+                message.subscription.reason,
+              )
+              return
+            }
+
+            // Fan-out a batched `{ updates: [...] }` frame back through the
+            // same single-update handler used for legacy `{ update }` frames.
+            // Each is isolated: one unusable frame (e.g. a `realtime.filter`
+            // handler that narrowed away the primary key) must not discard the
+            // rest of the batch.
+            if (Array.isArray(message.updates)) {
+              for (const u of message.updates) {
+                try {
+                  applyUpdate(u)
+                }
+                catch (e) {
+                  console.error('[Realtime] Failed to apply update', u?.collection, e)
+                }
+              }
+              return
+            }
+            if (message.update) {
+              applyUpdate(message.update)
+            }
+          }
+          catch (e) {
+            console.error('[Realtime] Failed to handle websocket message', e)
+          }
+        })
+      })
+
+      async function runSyncCollections() {
+        const store = storeRef
+        if (!store) {
+          return
+        }
+        const seen = new Set<string>()
+        for (const msg of subscriptions.active.values()) {
+          if (seen.has(msg.collection)) {
+            continue
+          }
+          seen.add(msg.collection)
+          const collection = store.$collections.find((c: any) => c.name === msg.collection)
+          if (!collection) {
+            continue
+          }
+          const stamp = lastStampPerCollection.get(msg.collection)
+          await store.$hooks.callHook('syncCollection', {
+            store,
+            meta: {},
+            collection,
+            lastUpdatedAt: stamp !== undefined ? stampToDate(stamp) : undefined,
+            loadedItems: () => [],
+            storeItems: (items: any[]) => {
+              for (const item of items) {
+                const key = collection.getKey(item)
+                if (key != null) {
+                  store.$cache.writeItem({ collection, key, item })
+                }
+              }
+            },
+            deleteItems: (keys: Array<string | number>) => {
+              for (const key of keys) {
+                store.$cache.deleteItem({ collection, key })
+              }
+            },
+          })
+        }
+      }
+
+      watch(ws.status, (status) => {
+        if (status !== 'OPEN') {
+          // Any drop (CLOSED/CONNECTING) re-arms readiness so mutations
+          // issued before the next init-ack hold until the server
+          // re-registers our clientId. The gate's built-in timeout keeps
+          // this from ever blocking mutations forever.
+          if (status === 'CLOSED' || status === 'CONNECTING') {
+            readyGate.reset()
+          }
+          return
+        }
+
+        connectCount++
+
+        // Announce our clientId first so the server can tag us for
+        // skip-self echo suppression before any mutation echoes arrive.
+        if (clientId) {
+          ws.send(JSON.stringify({
+            init: { clientId, v: RSTORE_DRIZZLE_PROTOCOL_VERSION },
+          }), false)
+        }
+
+        // Resubscribe to all active topics. On first open this replays
+        // subscriptions issued while CONNECTING; on reconnect it restores
+        // subscriptions across a transient disconnect.
+        for (const message of subscriptions.active.values()) {
+          ws.send(JSON.stringify({
+            subscription: message,
+          }), false)
+        }
+
+        // Notify live queries to refresh so updates missed while offline
+        // are recovered. Only fire on true reconnects (skip first open).
+        if (connectCount > 1) {
+          realtimeReconnectEventHook.trigger()
+
+          // Fire `syncCollection` per active collection so any plugin that
+          // can do a delta fetch (drizzle REST + updated_at filter, offline
+          // snapshot, etc.) gets a chance to backfill missed rows.
+          void runSyncCollections()
+        }
+      })
+    }
+  },
+})

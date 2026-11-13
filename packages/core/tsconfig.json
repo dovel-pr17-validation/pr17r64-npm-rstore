@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    // The shared test helpers in `test/utils/`, imported as `#test-utils/…`.
+    // Paths are resolved relative to this config file.
+    "paths": {
+      "#test-utils/*": [
+        "../../test/utils/*"
+      ]
+    },
+    "types": ["node"],
+    "strict": true,
+    "noImplicitOverride": true,
+    "noImplicitThis": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src",
+    "test"
+  ],
+  "exclude": [
+    // Imports @rstore/vue sources and the shared root test utils, which only
+    // type-check in their own package context.
+    "test/integration"
+  ]
+}

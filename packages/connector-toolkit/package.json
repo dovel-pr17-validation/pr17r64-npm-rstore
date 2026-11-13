@@ -1,0 +1,60 @@
+{
+  "name": "@rstore/connector-toolkit",
+  "type": "module",
+  "version": "0.8.4",
+  "description": "Shared building blocks for rstore REST connectors",
+  "license": "MIT",
+  "repository": {
+    "url": "https://github.com/Akryum/rstore.git",
+    "type": "git",
+    "directory": "packages/connector-toolkit"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "default": "./dist/index.mjs"
+    },
+    "./vite": {
+      "import": {
+        "types": "./dist/vite/index.d.ts",
+        "default": "./dist/vite/index.mjs"
+      },
+      "default": "./dist/vite/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "unbuild",
+    "dev": "unbuild --stub",
+    "dev:prepare": "pnpm run dev",
+    "test": "RSTORE_TEST_PACKAGE=connector-toolkit pnpm -w exec vitest run --config vitest.config.ts",
+    "test:types": "tsrs --noEmit"
+  },
+  "peerDependencies": {
+    "vite": "^7.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "unbuild": "catalog:",
+    "vite": "^7.3.1",
+    "vitest": "catalog:"
+  }
+}

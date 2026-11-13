@@ -1,0 +1,46 @@
+{
+  "name": "rstore-playground-drizzle-2",
+  "type": "module",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "nuxi dev",
+    "dev:build": "nuxi build",
+    "dev:prepare": "nuxi prepare",
+    "db:generate": "drizzle-kit generate",
+    "db:studio": "drizzle-kit studio --config drizzle.studio.config.ts"
+  },
+  "dependencies": {
+    "@lucia-auth/adapter-sqlite": "catalog:",
+    "@nuxthub/core": "catalog:",
+    "@rstore/nuxt": "workspace:^",
+    "@rstore/nuxt-drizzle": "workspace:^",
+    "arctic": "catalog:",
+    "drizzle-orm": "catalog:",
+    "lucia": "catalog:",
+    "shiki": "catalog:"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "catalog:",
+    "@libsql/client": "catalog:",
+    "@nuxt/devtools": "catalog:",
+    "@nuxt/devtools-kit": "catalog:",
+    "@nuxt/eslint-config": "catalog:",
+    "@nuxt/module-builder": "catalog:",
+    "@nuxt/schema": "catalog:",
+    "@nuxt/test-utils": "catalog:",
+    "@nuxt/ui": "catalog:",
+    "@types/node": "catalog:",
+    "@vueuse/core": "catalog:",
+    "@vueuse/nuxt": "catalog:",
+    "changelogen": "catalog:",
+    "drizzle-kit": "catalog:",
+    "eslint": "catalog:",
+    "nuxt": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "vue-tsc": "catalog:",
+    "wrangler": "catalog:",
+    "zod": "catalog:"
+  }
+}

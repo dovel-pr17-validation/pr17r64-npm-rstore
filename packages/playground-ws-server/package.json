@@ -1,0 +1,13 @@
+{
+  "name": "rstore-playground-ws-server",
+  "private": true,
+  "scripts": {
+    "build": "nitro build",
+    "dev": "nitro dev",
+    "dev:prepare": "nitro prepare",
+    "preview": "node .output/server/index.mjs"
+  },
+  "devDependencies": {
+    "nitropack": "catalog:"
+  }
+}

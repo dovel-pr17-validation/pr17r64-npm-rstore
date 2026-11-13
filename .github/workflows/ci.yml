@@ -1,0 +1,115 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm lint
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm build
+      - run: pnpm test:attw
+      - run: pnpm test:types
+
+  unit-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm build
+      # The devtools Nuxt boot suite drives a real browser.
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test --project nuxt-boot
+      - run: pnpm test --project integration --sequence.shuffle --sequence.seed=3
+      - run: pnpm test:coverage
+      - run: test -f coverage/coverage-summary.json
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage
+          if-no-files-found: error
+          retention-days: 14
+
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - packages/playground
+          - packages/playground-drizzle
+          - packages/playground-nuxt-directus
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm build
+      - run: pnpm -C "${{ matrix.package }}" exec playwright install --with-deps chromium
+      - run: pnpm -C "${{ matrix.package }}" test:e2e
+
+  browser-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install
+      # Fixtures load package entries and the built devtools client.
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:browser
+
+  ci:
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    needs:
+      - lint
+      - typecheck
+      - unit-test
+      - e2e
+      - browser-test
+    steps:
+      - name: Ensure all CI jobs succeeded
+        run: |
+          if [[ "${{ needs.lint.result }}" != "success" \
+            || "${{ needs.typecheck.result }}" != "success" \
+            || "${{ needs.unit-test.result }}" != "success" \
+            || "${{ needs.e2e.result }}" != "success" \
+            || "${{ needs.browser-test.result }}" != "success" ]]; then
+            echo "One or more CI jobs failed."
+            exit 1
+          fi

@@ -1,0 +1,175 @@
+import type { BatchCallConfig, CacheLayer, Collection, CollectionDefaults, CustomHookMeta, FormOperation, GlobalStoreType, ResolvedCollection, ResolvedCollectionItem, StoreCore, StoreSchema } from '@rstore/shared'
+import { set } from '@rstore/shared'
+import { resolveBatchCall } from '../batch'
+import { isKeyDefined } from '../key'
+import { reportOperationError } from '../utils/operationError'
+import { finalizeMutation } from './finalizeMutation'
+import { createOptimisticLayerLifecycle, prepareMutationItem, replaceTransportItem } from './optimistic'
+
+export interface CreateOptions<
+  TCollection extends Collection,
+  TCollectionDefaults extends CollectionDefaults,
+  TSchema extends StoreSchema,
+> {
+  store: StoreCore<TSchema, TCollectionDefaults>
+  /** Metadata shared by all hooks belonging to this mutation. */
+  meta?: CustomHookMeta
+  collection: ResolvedCollection<TCollection, TCollectionDefaults, TSchema>
+  item: Partial<ResolvedCollectionItem<TCollection, TCollectionDefaults, TSchema>>
+  skipCache?: boolean
+  optimistic?: boolean | Partial<ResolvedCollectionItem<TCollection, TCollectionDefaults, TSchema>>
+  /**
+   * Form operations (op log) from a form submission.
+   * Passed through to plugin hooks so they can handle relational edits.
+   */
+  formOperations?: FormOperation<ResolvedCollectionItem<TCollection, TCollectionDefaults, TSchema>>[]
+
+  /**
+   * Whether this mutation should participate in batching.
+   * Only applies when store-level batching is enabled.
+   *
+   * - `false` — opt out of batching
+   * - `true` (or omitted) — join the default group
+   * - `{ group: 'name' }` — join a specific batch group
+   *
+   * @default true
+   */
+  batch?: BatchCallConfig
+}
+
+/** Create one item through connector hooks and optimistic cache lifecycle. */
+export async function createItem<
+  TCollection extends Collection,
+  TCollectionDefaults extends CollectionDefaults,
+  TSchema extends StoreSchema,
+>({
+  store,
+  meta = {},
+  collection,
+  item: inputItem,
+  skipCache,
+  optimistic = true,
+  formOperations,
+  batch,
+}: CreateOptions<TCollection, TCollectionDefaults, TSchema>): Promise<ResolvedCollectionItem<TCollection, TCollectionDefaults, TSchema>> {
+  const operation = {}
+  try {
+    let preparedItem = prepareMutationItem(store, collection, inputItem)
+    let optimisticItem = preparedItem.optimisticItem
+    const transportItem = preparedItem.transportItem
+
+    let result: ResolvedCollectionItem<TCollection, TCollectionDefaults, TSchema> | undefined
+
+    await store.$hooks.callHook('beforeMutation', {
+      operation,
+      store: store as unknown as GlobalStoreType,
+      meta,
+      collection,
+      mutation: 'create',
+      item: transportItem,
+      modifyItem: (path: any, value: any) => {
+        set(optimisticItem, path, value)
+        preparedItem = prepareMutationItem(store, collection, optimisticItem)
+        replaceTransportItem(transportItem, preparedItem.transportItem)
+      },
+      setItem: (newItem) => {
+        const prepared = prepareMutationItem(store, collection, newItem as Partial<ResolvedCollectionItem<TCollection, TCollectionDefaults, TSchema>>, preparedItem)
+        preparedItem = prepared
+        optimisticItem = prepared.optimisticItem
+        replaceTransportItem(transportItem, prepared.transportItem)
+      },
+      formOperations: formOperations as FormOperation[],
+    })
+
+    const optimisticLayer = createOptimisticLayerLifecycle(store)
+
+    if (!skipCache && optimistic) {
+      let key = collection.getKey(optimisticItem)
+      if (!isKeyDefined(key)) {
+        key = crypto.randomUUID()
+      }
+      const layer: CacheLayer = {
+        id: crypto.randomUUID(),
+        collectionName: collection.name,
+        state: {
+          [key]: {
+            ...optimisticItem,
+            ...typeof optimistic === 'object' ? optimistic : {},
+            $overrideKey: key,
+          },
+        },
+        deletedItems: new Set(),
+        optimistic: true,
+        prevent: {
+          // @TODO queue mutations and reconcile the optimistic object with the actual result
+          update: true,
+          delete: true,
+        },
+      }
+      optimisticLayer.add(layer)
+    }
+
+    try {
+      // Batching: enqueue into batch scheduler if eligible
+      const batchCall = resolveBatchCall(batch)
+      if (store.$batch?.options.mutations && batchCall.enabled) {
+        result = await store.$batch.enqueueCreate(collection, transportItem, meta, batchCall.group, formOperations as FormOperation[]) as ResolvedCollectionItem<TCollection, TCollectionDefaults, TSchema>
+      }
+      else {
+        const abort = store.$hooks.withAbort({ explicit: true })
+        await store.$hooks.callHook('createItem', {
+          store: store as unknown as GlobalStoreType,
+          meta,
+          collection,
+          item: transportItem,
+          getResult: () => result,
+          setResult: (newResult, options) => {
+            result = newResult as ResolvedCollectionItem<TCollection, TCollectionDefaults, TSchema>
+            if (result && options?.abort !== false) {
+              abort()
+            }
+          },
+          abort,
+          formOperations: formOperations as FormOperation[],
+        }, abort)
+      }
+
+      const commitResult = await finalizeMutation(store, {
+        operation,
+        meta,
+        collection,
+        mutation: 'create',
+        item: transportItem,
+        result,
+        skipCache,
+        formOperations: formOperations as FormOperation[],
+      }, {
+        requireResultError: 'Item creation failed: result is nullish',
+        missingCacheKeyError: 'Item creation failed: key is not defined',
+        onBeforeApplyCache: optimisticLayer.remove,
+      })
+
+      result = commitResult.result as ResolvedCollectionItem<TCollection, TCollectionDefaults, TSchema>
+    }
+    catch (error) {
+      // Rollback optimistic layer in case of error
+      optimisticLayer.remove()
+      throw error
+    }
+
+    return result as NonNullable<typeof result>
+  }
+  catch (error) {
+    reportOperationError(store.$hooks, 'mutationError', {
+      operation,
+      store: store as unknown as GlobalStoreType,
+      meta,
+      collection,
+      mutation: 'create',
+      many: false,
+      item: inputItem,
+      error,
+    })
+    throw error
+  }
+}

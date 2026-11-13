@@ -1,0 +1,182 @@
+import { faker } from '@faker-js/faker'
+
+export interface Db {
+  todos: Todo[]
+  users: User[]
+  bots: Bot[]
+  messages: Message[]
+  dataSources: DataSource[]
+  dataCollections: DataCollection[]
+  dataFields: DataField[]
+  authors: Author[]
+  books: Book[]
+  collabDocuments: CollabDocument[]
+}
+
+const authors = generateAuthors(1000)
+const books = generateBooks(5000, authors)
+
+export const db: Db = {
+  todos: [],
+  users: [
+    {
+      id: 'user1',
+      email: 'user1@acme.com',
+      name: faker.person.fullName(),
+      avatar: faker.image.avatar(),
+      createdAt: new Date(),
+    },
+    {
+      id: 'user1bis',
+      email: 'user1@acme.com',
+      name: faker.person.fullName(),
+      avatar: faker.image.avatar(),
+      createdAt: new Date(),
+    },
+    {
+      id: 'user2',
+      email: 'user2@acme.com',
+      name: faker.person.fullName(),
+      avatar: faker.image.avatar(),
+      createdAt: new Date(),
+    },
+    {
+      id: 'user3',
+      email: 'user3@acme.com',
+      name: faker.person.fullName(),
+      avatar: faker.image.avatar(),
+      createdAt: new Date(),
+    },
+  ],
+  bots: [
+    {
+      id: 'bot1',
+      name: 'DataBot',
+      createdAt: new Date(),
+    },
+  ],
+  messages: [
+    {
+      id: 'message1',
+      authorId: 'user1',
+      recipientId: 'user2',
+      text: faker.lorem.paragraph(),
+      createdAt: new Date(),
+    },
+    {
+      id: 'message2',
+      authorId: 'user2',
+      recipientId: 'user1',
+      text: faker.lorem.paragraph(),
+      createdAt: new Date(),
+    },
+    {
+      id: 'message3',
+      authorId: 'bot1',
+      recipientId: 'user1',
+      text: faker.lorem.paragraph(),
+      createdAt: new Date(),
+    },
+    {
+      id: 'message4',
+      authorId: 'user2',
+      recipientId: 'user3',
+      text: faker.lorem.paragraph(),
+      createdAt: new Date(),
+    },
+  ],
+  dataSources: [
+    {
+      id: 'source1',
+      name: 'My DB',
+    },
+  ],
+  dataCollections: [
+    {
+      id: 'collection1',
+      dataSourceId: 'source1',
+      name: 'Posts',
+    },
+  ],
+  dataFields: [
+    {
+      id: 'field1',
+      dataCollectionId: 'collection1',
+      name: 'Title',
+      type: 'string',
+      nullable: false,
+    },
+    {
+      id: 'field2',
+      dataCollectionId: 'collection1',
+      name: 'Content',
+      type: 'string',
+      nullable: false,
+    },
+    {
+      id: 'field3',
+      dataCollectionId: 'collection1',
+      name: 'Published',
+      type: 'boolean',
+      nullable: true,
+    },
+  ],
+  authors,
+  books,
+  collabDocuments: [
+    {
+      id: 'doc1',
+      title: 'Getting Started with rstore',
+      body: 'rstore is a reactive data store for Vue and Nuxt applications. It provides a powerful way to manage your application state with built-in support for caching, real-time updates, and form handling.',
+      status: 'published',
+      createdAt: new Date(),
+    },
+    {
+      id: 'doc2',
+      title: 'Collaborative Editing Guide',
+      body: 'This document demonstrates how to use form objects with $rebase for real-time collaborative editing. Multiple users can edit the same document simultaneously.',
+      status: 'draft',
+      createdAt: new Date(),
+    },
+    {
+      id: 'doc3',
+      title: 'Meeting Notes',
+      body: 'Discuss project roadmap and upcoming features. Review pull requests and assign tasks for the next sprint.',
+      status: 'draft',
+      createdAt: new Date(),
+    },
+    {
+      id: 'doc4',
+      title: 'Release Checklist',
+      body: 'Track final review items before publishing the next collaborative editing update.',
+      status: 'draft',
+      createdAt: new Date(),
+    },
+  ],
+}
+
+function generateAuthors(count: number): Author[] {
+  const authors: Author[] = []
+  for (let i = 0; i < count; i++) {
+    authors.push({
+      id: `author${i + 1}`,
+      name: faker.person.fullName(),
+      birthDate: faker.date.past({ years: 100 }),
+    })
+  }
+  return authors
+}
+
+function generateBooks(count: number, authors: Author[]): Book[] {
+  const books: Book[] = []
+  for (let i = 0; i < count; i++) {
+    books.push({
+      id: `book${i + 1}`,
+      title: faker.book.title(),
+      authorId: authors[faker.number.int({ min: 0, max: authors.length - 1 })]!.id,
+      genre: faker.book.genre(),
+      publishedAt: faker.date.past({ years: 50 }),
+    })
+  }
+  return books
+}

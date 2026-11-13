@@ -1,0 +1,17 @@
+/** Share a pending operation and release its key before consumer settlement handlers run. */
+export function dedupePromise<TResult>(map: Map<string, Promise<TResult>>, key: string, fn: () => Promise<TResult>): Promise<TResult> {
+  if (map.has(key)) {
+    return map.get(key)!
+  }
+
+  const promise = fn()
+  map.set(key, promise)
+
+  promise.then(() => {
+    map.delete(key)
+  }, () => {
+    map.delete(key)
+  })
+
+  return promise
+}

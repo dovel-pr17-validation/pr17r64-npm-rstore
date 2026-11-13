@@ -1,0 +1,59 @@
+{
+  "name": "@rstore/vite-monospace",
+  "type": "module",
+  "version": "0.8.4",
+  "description": "Vite plugin for rstore + Monospace",
+  "repository": {
+    "url": "https://github.com/Akryum/rstore.git",
+    "type": "git",
+    "directory": "packages/vite-monospace"
+  },
+  "sideEffects": false,
+  "rstore": {
+    "skillDependencies": [
+      "@rstore/monospace",
+      "@rstore/vue"
+    ]
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "default": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "skills"
+  ],
+  "scripts": {
+    "build": "unbuild",
+    "dev": "unbuild --stub",
+    "dev:prepare": "pnpm run dev",
+    "prepack": "node ../../scripts/sync-dep-skills.mjs .",
+    "test": "RSTORE_TEST_PACKAGE=vite-monospace pnpm -w exec vitest run --config vitest.config.ts",
+    "test:types": "tsrs --noEmit"
+  },
+  "peerDependencies": {
+    "vite": "^7.0.0"
+  },
+  "dependencies": {
+    "@rstore/connector-toolkit": "workspace:^",
+    "@rstore/monospace": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "unbuild": "catalog:",
+    "vite": "^7.3.1",
+    "vitest": "catalog:"
+  }
+}

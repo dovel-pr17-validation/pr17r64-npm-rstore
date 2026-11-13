@@ -1,0 +1,140 @@
+{
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/blog/items/Todos": {
+      "get": {
+        "responses": {}
+      },
+      "post": {
+        "responses": {}
+      },
+      "patch": {
+        "responses": {}
+      },
+      "delete": {
+        "responses": {}
+      }
+    },
+    "/api/blog/items/Todos/{key}": {
+      "get": {
+        "responses": {}
+      },
+      "patch": {
+        "responses": {}
+      },
+      "delete": {
+        "responses": {}
+      }
+    },
+    "/api/blog/items/Profiles": {
+      "get": {
+        "responses": {}
+      },
+      "post": {
+        "responses": {}
+      },
+      "patch": {
+        "responses": {}
+      },
+      "delete": {
+        "responses": {}
+      }
+    },
+    "/api/blog/items/Profiles/{key}": {
+      "get": {
+        "responses": {}
+      },
+      "patch": {
+        "responses": {}
+      },
+      "delete": {
+        "responses": {}
+      }
+    }
+  },
+  "x-monospace-mappings": {
+    "Todos": {
+      "many": {
+        "$ref": "#/paths/~1api~1blog~1items~1Todos"
+      },
+      "one": {
+        "$ref": "#/paths/~1api~1blog~1items~1Todos~1{key}"
+      }
+    },
+    "Profiles": {
+      "many": {
+        "$ref": "#/paths/~1api~1blog~1items~1Profiles"
+      },
+      "one": {
+        "$ref": "#/paths/~1api~1blog~1items~1Profiles~1{key}"
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TodosCollectionOutput": {
+        "required": [
+          "id",
+          "title"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "author_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "author": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProfilesCollectionOutput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ProfilesCollectionOutput": {
+        "required": [
+          "id"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "todos": {
+            "type": "object",
+            "properties": {
+              "data": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TodosCollectionOutput"
+                }
+              }
+            },
+            "required": [
+              "data"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

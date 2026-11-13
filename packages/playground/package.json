@@ -1,0 +1,46 @@
+{
+  "name": "rstore-playground",
+  "type": "module",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "nuxi dev",
+    "dev:build": "nuxi build",
+    "dev:prepare": "nuxi prepare",
+    "dev:preview": "nuxi preview",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "dependencies": {
+    "@nuxt/kit": "catalog:",
+    "@rstore/devtools": "workspace:^",
+    "@rstore/nuxt": "workspace:^",
+    "@rstore/nuxt-multiplayer": "workspace:^",
+    "@rstore/shared": "workspace:^",
+    "@rstore/vue": "workspace:^",
+    "@vueuse/core": "catalog:",
+    "shiki": "catalog:"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "catalog:",
+    "@nuxt/devtools": "catalog:",
+    "@nuxt/devtools-kit": "catalog:",
+    "@nuxt/eslint-config": "catalog:",
+    "@nuxt/module-builder": "catalog:",
+    "@nuxt/schema": "catalog:",
+    "@nuxt/test-utils": "catalog:",
+    "@nuxt/ui": "catalog:",
+    "@playwright/test": "catalog:",
+    "@types/node": "catalog:",
+    "@vueuse/core": "catalog:",
+    "@vueuse/nuxt": "catalog:",
+    "changelogen": "catalog:",
+    "eslint": "catalog:",
+    "nuxt": "catalog:",
+    "nuxt-auth-utils": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "vue-tsc": "catalog:",
+    "zod": "catalog:"
+  }
+}

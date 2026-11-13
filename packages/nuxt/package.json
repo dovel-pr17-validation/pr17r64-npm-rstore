@@ -1,0 +1,73 @@
+{
+  "name": "@rstore/nuxt",
+  "type": "module",
+  "version": "0.8.4",
+  "description": "Reactive Store for Nuxt",
+  "license": "MIT",
+  "repository": {
+    "url": "https://github.com/Akryum/rstore.git",
+    "type": "git",
+    "directory": "packages/nuxt"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "rstore": {
+    "skillDependencies": [
+      "@rstore/vue"
+    ]
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/module.d.ts",
+      "import": "./dist/module.mjs",
+      "require": "./dist/module.cjs"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.mjs"
+    }
+  },
+  "main": "./dist/module.cjs",
+  "types": "./dist/module.d.ts",
+  "files": [
+    "dist",
+    "skills"
+  ],
+  "scripts": {
+    "build": "pnpm run client:build && nuxi prepare playground && nuxt-module-build build",
+    "dev": "pnpm run build",
+    "dev:prepare": "nuxt prepare && pnpm run client:prepare",
+    "dev:playground": "nuxt dev ../playground",
+    "client:build": "pnpm --filter @rstore/devtools build",
+    "client:dev": "pnpm --filter @rstore/devtools dev",
+    "client:prepare": "pnpm --filter @rstore/devtools dev:prepare",
+    "test": "RSTORE_TEST_PACKAGE=nuxt pnpm -w exec vitest run --config vitest.config.ts",
+    "test:watch": "RSTORE_TEST_PACKAGE=nuxt pnpm -w exec vitest watch --config vitest.config.ts",
+    "test:types": "vue-tsc --noEmit",
+    "prepack": "node ../../scripts/sync-dep-skills.mjs ."
+  },
+  "dependencies": {
+    "@nuxt/kit": "^4.0.0",
+    "@rstore/devtools": "workspace:^",
+    "@rstore/shared": "workspace:^",
+    "@rstore/vue": "workspace:^",
+    "serialize-javascript": "^6.0.2"
+  },
+  "devDependencies": {
+    "@iconify-json/lucide": "catalog:",
+    "@nuxt/devtools": "catalog:",
+    "@nuxt/module-builder": "catalog:",
+    "@nuxt/schema": "catalog:",
+    "@nuxt/test-utils": "catalog:",
+    "@nuxt/ui": "catalog:",
+    "@types/node": "catalog:",
+    "@vueuse/core": "catalog:",
+    "@vueuse/nuxt": "catalog:",
+    "nuxt": "catalog:",
+    "shiki": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "vue-tsc": "catalog:"
+  }
+}

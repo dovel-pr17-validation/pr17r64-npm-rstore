@@ -1,0 +1,29 @@
+{
+  "name": "rstore-drizzle-playground",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "nuxt dev",
+    "dev:build": "nuxt build",
+    "dev:prepare": "nuxt prepare",
+    "dev:preview": "nuxt preview",
+    "db:push": "drizzle-kit push",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "dependencies": {
+    "@libsql/client": "catalog:",
+    "@rstore/nuxt-drizzle": "workspace:*",
+    "@vueuse/core": "catalog:",
+    "@vueuse/nuxt": "catalog:",
+    "drizzle-orm": "catalog:"
+  },
+  "devDependencies": {
+    "@iconify-json/lucide": "catalog:",
+    "@iconify-json/simple-icons": "catalog:",
+    "@nuxt/ui": "catalog:",
+    "@playwright/test": "catalog:",
+    "drizzle-kit": "catalog:",
+    "nuxt": "catalog:"
+  }
+}

@@ -1,0 +1,801 @@
+# Querying Data
+
+Each collection API exposes several ways to read data. Access them with `store.<collectionName>.<method>`.
+
+Here are some examples:
+
+```ts{3-4,8-9}
+const store = await createStore({
+  schema: [
+    { name: 'Todo' },
+    { name: 'users' },
+  ],
+  plugins: [],
+})
+const { data: todos } = store.Todo.query(q => q.many())
+const { data: users } = store.users.query(q => q.many())
+```
+
+## Which method should I use?
+
+| Use case | Recommended API |
+|---|---|
+| Reactive data in components | `query` |
+| Reactive data + realtime subscription | `liveQuery` |
+| One-off async read (non-reactive) | `findFirst` / `findMany` |
+| Synchronous cache-only read | `peekFirst` / `peekMany` |
+
+## Query composables <Badge text="Changed in v0.7" type="warning" />
+
+The query composables are the recommended way to fetch data from the server. They are designed to be used in a Vue component and return a reactive result to be used in the components.
+
+The `query` and `liveQuery` composables return an object with the following properties:
+
+- `data`: a ref that contains the data.
+
+- `live`: a readonly ref indicating that at least one existing page is followed and every followed page has completed subscription registration. False for ordinary queries, SSR, empty selection, registration, backoff and server-ended subscriptions; data can remain available while false. See [server-ended subscriptions](./live.md#server-ended-subscriptions).
+
+- `confirmed`: a readonly ref indicating whether every existing page has a server-confirmed result for its current options.
+
+- `loading`: a ref that indicates whether the user is waiting on data <Badge text="Changed in v0.9" type="warning" />. It is `true` while a blocking fetch is running, and also while a background refresh is running if there is nothing to display yet. See [Foreground and background fetch state](#foreground-and-background-fetch-state).
+
+- `error`: a ref that contains the error if the data could not be fetched. A blocking failure takes precedence over a background one.
+
+- `foreground` / `background`: the state of each kind of fetch, to tell a first load apart from a silent refresh <Badge text="New in v0.9" />.
+
+- `refresh`: a function that can be called to refresh the data. It reloads every page held in `pages`, not just the main one <Badge text="Changed in v0.9" type="warning" />, and the returned promise settles once they all have. Pass `pages` to reload a subset: `refresh({ pages: [0] })` reloads the page at index `0` only, and `refresh({ pages: [] })` reloads none. Pass `prune: true` to also delete from the cache the items the refreshed result no longer holds, see [Pruning the cache on refresh](#pruning-the-cache-on-refresh).
+
+- `pages`: a ref containing the query pages.
+
+- `mainPage`: the main page of the query. `refresh(options)` overrides shape the reloads without being stored on `mainPage.options`, which only keeps a `pageIndex` passed to `refresh` <Badge text="Changed in v0.9" type="warning" />.
+
+- `fetchMore`: a function that fetches an additional page.
+
+- `getPage`: a function that returns an existing page or creates one if needed.
+
+- `meta`: a ref that contains metadata that plugins can set or update.
+
+The composables also return a promise so they can be used with async setup.
+
+```vue
+<script setup>
+const store = useStore()
+// Plays nice with Nuxt SSR!
+const { data: todos } = await store.Todo.query(q => q.many())
+</script>
+```
+
+### Confirmed results
+
+Use `query.confirmed.value` before showing an empty state, "not found", or a server-confirmed count. Each page exposes a readonly boolean `page.confirmed`; the query is confirmed only when every existing page is confirmed. Holes in the pages array do not count, but a page created with `getPage()` starts unconfirmed until loaded.
+
+A successful server fetch or published live `setResult` push confirms its page, including empty lists and missing items. A cache-only read, a cache-first hit without saved confirmation, and the cache half of `cache-and-fetch` stay unconfirmed. Fetch failures do not confirm a page. `loading` and `completed` describe fetch progress; they do not prove server confirmation.
+
+```ts
+const query = store.todos.query(q => q.many({ fetchPolicy: 'cache-and-fetch' }))
+const showEmpty = computed(() => query.confirmed.value && query.data.value.length === 0)
+```
+
+Confirmation survives ordinary cache writes and refreshes with unchanged options. Changing effective options clears it immediately, before the reload starts. Resetting the cache, or clearing the query's collection with `$cache.clearCollection`, clears it until another server result lands; `clearCollection` does not refetch, and `no-cache` pages keep their confirmation. Saved page references retain their confirmation across remounts within the cache lifetime and SSR hydration. Confirmation compares serializable options only, like the query id: function-valued options such as `filter` are local cache-read callbacks, so a new inline callback after a re-render, remount or SSR hydration keeps confirmation. A function-only change reloads pages in place without unconfirming them; if a callback changes what the server should return, also change a serializable option such as `params`. Older payloads without saved page confirmation stay unconfirmed until fetched or pushed. `no-cache` values are not retained in the cache or SSR payload.
+
+A confirmed `computed` page still follows local cache membership, so confirmation means the server confirmed these options, not that later local writes cannot change the displayed rows or count. Use `resultMode: 'responseRefs'` when server-controlled membership is needed.
+
+### Foreground and background fetch state <Badge text="New in v0.9" />
+
+A query fetches data in two ways, and each one has its own state object:
+
+- `foreground`: blocking fetches - the initial load, `refresh()`, `fetchMore()`, the window focus auto refresh, a cache reset and a live query reconnect.
+- `background`: the silent revalidation half of the [`cache-and-fetch`](#possible-fetch-policies) fetch policy. No other policy uses it.
+
+Both objects expose the same properties:
+
+| Property | Description |
+| --- | --- |
+| `loading` | Whether at least one fetch of that kind is in flight. |
+| `error` | Error of the latest settled fetch of that kind. |
+| `completed` | Whether a fetch of that kind settled and none is in flight. |
+| `lastUpdated` | `Date.now()` of the last *successful* fetch of that kind, or `null`. |
+| `promise` | Settles when the in-flight fetches of that kind are done. It never rejects - read `error` instead. |
+
+The top-level `loading` and `error` are aggregates over both, so most components don't need to think about this:
+
+```ts
+// `hasNothingToDisplay` is `true` when `data` is `null` or an empty array
+loading = foreground.loading || (background.loading && hasNothingToDisplay)
+error = foreground.error ?? background.error
+```
+
+Reach for the individual states when you want to tell the two apart - typically to show a discreet indicator while `cache-and-fetch` revalidates data that is already on screen:
+
+```vue
+<script setup>
+const { data: todos, loading, background } = await store.Todo.query(q => q.many({
+  fetchPolicy: 'cache-and-fetch',
+}))
+</script>
+
+<template>
+  <!-- Only when there is nothing to look at yet -->
+  <Spinner v-if="loading" />
+  <template v-else>
+    <!-- Discreet hint that the list is being refreshed in the background -->
+    <RefreshIndicator v-if="background.loading" />
+    <TodoList :todos="todos" />
+  </template>
+</template>
+```
+
+You can also wait for the background fetch to land:
+
+```ts
+await query.background.promise
+
+if (query.background.error) {
+  // The silent refresh failed, the displayed data is stale
+}
+```
+
+### Query first
+
+With the `first` query builder method, `query` returns the first item matching the key or filter from cache, then fetches when needed.
+
+```ts
+const { data: todo } = store.Todo.query(q => q.first('some-key'))
+```
+
+```ts
+const someKey = ref('some-key')
+
+const { data: todo } = store.Todo.query(q => q.first(someKey))
+```
+
+```ts
+const route = useRoute()
+
+const { data: todo } = store.Todo.query(q =>
+  q.first(route.params.someKey))
+```
+
+Example with filtering:
+
+```ts
+const email = ref('cat@acme.com')
+
+const { data: someUsers } = store.User.query(q => q.first({
+  filter: item => item.email === email.value,
+  params: {
+    email: email.value,
+  },
+}))
+```
+
+::: info
+Why specify the `params` in the query? The `params` are used to fetch the data from the server. By design, we want to compute the result also on the client side -- hence the `filter` function. The `params` are used to fetch the data from the server and are accessible in the [Plugin hooks](../plugin/hooks.md).
+
+---
+
+We can also create our own convention for the `params` and `filter`. For example, we could turn the `filter` option into an object that is both used to filter the data in the cache and to fetch the data from the server, using [plugin hooks](../plugin/hooks.md).
+:::
+
+### Query many
+
+With the `many` query builder method, `query` returns all items matching the (optional) filter from cache, then fetches when needed.
+
+```ts
+const { data: todos } = store.Todo.query(q => q.many()) // All todos
+```
+
+```ts
+const email = ref('@acme.com')
+const { data: someUsers } = store.User.query(q => q.many({
+  filter: item => item.email.endsWith(email.value),
+  params: {
+    email: {
+      $like: `%${email.value}`,
+    },
+  },
+}))
+```
+
+### Disabling a query
+
+You can disable a query by returning the `{ enabled: false }` flag as the find options:
+
+```ts
+const enabled = ref(false)
+
+const { data: todos } = store.Todo.query(q => q.many({
+  enabled: enabled.value,
+}))
+```
+
+```ts
+const enabled = ref(false)
+
+const { data: todo } = store.Todo.query(q => q.first(
+  enabled.value ? 'some-id' : { enabled: false }
+))
+```
+
+This syntax is useful in TypeScript because it lets you guard against nullish values at the same time:
+
+```ts
+const someItem = ref<Record<string, any> | null>(null)
+
+const { data: parent } = store.Item.query(q => q.first(
+  someItem.value
+    ? {
+        params: {
+          // `someItem.value` is not nullish here
+          id: someItem.value.parentId,
+        }
+      }
+    : { enabled: false }
+))
+```
+
+### Dependent queries
+
+```ts
+// Get the user
+const { data: user } = store.User.query(q => q.first('user-id'))
+
+// Then get the user's projects
+const { data: projects } = store.Project.query(q => q.many(
+  user.value
+    ? {
+        params: {
+          userId: user.value.id,
+        }
+      }
+    : { enabled: false }
+))
+```
+
+### Pruning the cache on refresh <Badge text="New in v0.9" />
+
+A refresh writes the rows the server returns, but rows it no longer returns (deleted remotely, moved out of the filter, removed from a relation) stay in the cache. Pass `prune: true` to make sure no dangling item is left:
+
+```ts
+const { refresh } = store.Todo.query(q => q.many({
+  include: { author: true },
+}))
+
+await refresh({ prune: true })
+```
+
+Once every reloaded page fetched successfully, each item of the query collection, and of every collection reached through `include` (at any depth), that the refreshed result does not hold is deleted from the cache.
+
+- It works whether the experimental garbage collection is enabled or not.
+- Other queries are not taken into account: an item another query displays is deleted too if this result does not hold it.
+- Rows of the pages left out by `pages` are kept, since they are still part of the query result.
+- A related item still linked in the cache to an item of the result is kept.
+- Nothing is deleted if no page is reloaded (`pages: []`), if a reloaded page fails or is superseded by a newer load, or for a `no-cache` query, whose result is not in the cache.
+- Items with a pending optimistic mutation are kept.
+
+#### Saved results
+
+Each query saves its result shape, "not found" and empty lists included, so a query mounted again with the same options reads it cache-first. Every distinct set of options saves one entry. Entries of mounted queries are always kept. Entries of queries no longer mounted are dropped 30 minutes after their last use, and only the 500 most recently used are kept. They are checked every minute, as soon as the size limit is exceeded, and on `store.$cache.garbageCollect()`.
+
+Change these bounds with the `queryStateRetention` store option, or pass `false` to keep them forever:
+
+```ts
+const store = await createStore({
+  schema,
+  plugins,
+  queryStateRetention: {
+    ttlMs: 5 * 60_000, // drop after 5 minutes unused
+    maxSize: 100, // keep at most 100 unused entries
+  },
+})
+```
+
+::: tip
+The cache also bounds its deletion tombstones: `tombstoneGc` defaults to `{ intervalMs: 60_000, ttlMs: 86_400_000, maxSize: 10_000 }`.
+:::
+
+### Pagination <Badge text="New in v0.8.2" />
+
+#### Fetch more
+
+You can use the `fetchMore` function returned by the query composable to fetch additional pages of data. This is useful for implementing infinite scrolling or "Load more" buttons.
+
+By default, rstore exposes the `pageIndex` and `pageSize` options for pagination, that can be used in the [Collection hooks](../schema/collection.md#collection-hooks) or in the [Plugin hooks](../plugin/hooks.md#fetchmany) to send the pagination parameters to the backend accordingly:
+
+- `pageIndex`: The index of the page to fetch (starting from 0). This is used to put the page at the correct position in the `pages` array ref (see [Distinct Pages](#distinct-pages)).
+- `pageSize`: The number of items per page.
+
+```ts
+const { data: messages, fetchMore }
+  = await store.messages.query(q => q.many({
+    pageIndex: 0,
+    pageSize: 10,
+  }))
+
+// ...
+
+const { page } = await fetchMore({
+  pageIndex: 1,
+})
+```
+
+In case you don't really need to keep track of the pages, you don't have to use the `pageIndex` nor the `pageSize` options.
+
+```ts
+const { data: messages, fetchMore }
+  = await store.messages.query(q => q.many({
+    // Some options here...
+  }))
+
+// ...
+
+await fetchMore({
+  // Some other options here...
+})
+```
+
+::: tip
+The `fetchMore` method returns an "hybrid promise", meaning you can use the result both with `await` and directly as an object.
+:::
+
+#### Distinct Pages
+
+Live subscriptions compare resolved options after defaults and `resolveFindOptions` hooks. Equivalent resolved reads retain their subscriptions, including when `fetchPolicy`, `dedupe`, `experimentalGarbageCollection`, or `fetchOptions.autoRefresh` changes. `resultMode` remains part of subscription identity; metadata used by resolution hooks can change that identity. Teardown receives the original opening options and key.
+
+For live pagination, use `liveQuery(builder, { pages: () => [currentPageIndex.value] })` to follow only the displayed existing page, or `{ pages: 'all' }` to follow every existing page. The default follows only the main page. Each subscription's `refresh` and `setResult` target its page. See [following selected pages](./live.md#follow-selected-pages).
+
+Offset pages update independently: inserts and deletes can shift rows across windows and create gaps or duplicates when several pages are displayed together. Keeping several displayed pages consistent with each other, for example with pinned cursor windows, is not supported yet.
+
+In case you want to implement pagination in the listing view as well, you can use the `pages` ref returned by the query composable. It allows to display only one page at a time.
+
+When `fetchMore` is called, the fetched page is stored in the `pages` ref at the index corresponding to the `pageIndex` used in the fetch (or at the end of `pages` if not provided). This way, you can keep track of all the fetched pages and display them accordingly.
+
+First you need to pass the `pageIndex` and `pageSize` options to the initial query:
+
+```ts
+const pageSize = 10
+const pageIndex = ref(0)
+
+const { fetchMore, getPage }
+  = await store.messages.query(q => q.many({
+    pageIndex: 0,
+    pageSize,
+  }))
+```
+
+::: warning
+Don't use the reactive `pageIndex` ref directly in the query options. The query should always be initialized with a static `pageIndex` (usually `0`) to fetch the first page. The `pageIndex` ref should only be used to get the current page with `getPage` and to pass the correct `pageIndex` to the `fetchMore` function.
+:::
+
+Then you can create a computed property to get the current page based on the `pageIndex` ref. `getPage` returns the existing page or creates an empty page object so the UI can read `data`, `loading`, `completed`, and `error` immediately. It doesn't fetch data by itself, so call `fetchMore` for non-main pages that have not completed loading yet. The main page at index `0` is loaded by the query itself.
+
+```ts
+const currentPage = computed(() => getPage({
+  pageIndex: pageIndex.value,
+}))
+
+watch(currentPage, (page) => {
+  if (pageIndex.value > 0 && !page.completed && !page.loading) {
+    fetchMore({
+      pageIndex: pageIndex.value,
+    })
+  }
+}, {
+  immediate: true,
+})
+```
+
+You can then access some useful properties of the `currentPage`:
+
+- `page.data`: the items for the page.
+- `page.loading`: whether the page has nothing to display and something is being fetched for it.
+- `page.completed`: whether the latest blocking page fetch has completed.
+- `page.error`: the error if the page could not be fetched.
+- `page.foreground` / `page.background`: the same [fetch state objects](#foreground-and-background-fetch-state) as the query, scoped to this page <Badge text="New in v0.9" />.
+
+::: tip
+`fetchMore` is a blocking fetch, so the query-level `loading` turns `true` while an additional page loads. Use `mainPage.loading` or the page-scoped state above if you don't want to dim the already displayed items.
+:::
+
+::: info
+`refresh()` reloads those pages too, so a page keeps reporting its `error` until its own re-attempt settles <Badge text="Changed in v0.9" type="warning" />. Pass `pages` to narrow it down — `refresh({ pages: [0, pageIndex] })` reloads the first page and the displayed one, and a page left out keeps both its data and its fetch state, since nothing is reset for a page that is not loaded again.
+
+Changing the query options is a different query instead: the pages of the previous one are dropped, and the main page is loaded again from scratch. Function-valued options, such as `filter`, are local cache callbacks and do not identify the query or its pages <Badge text="Changed in v0.9" type="warning" />: when only a function changes, for example an inline callback rebuilt on re-render, the pages are kept and reloaded in place.
+:::
+
+```vue
+<template>
+  <UTable
+    :data="currentPage.data"
+    :loading="currentPage.loading"
+  />
+  <UAlert v-if="currentPage.error">
+    <template #title>
+      Error loading page: {{ currentPage.error.message }}
+    </template>
+  </UAlert>
+</template>
+```
+
+#### Page data caching and reactivity
+
+All the first consecutive pages data will be reactively computed from the cache, while other "scarce" pages will hold in memory a list of item keys instead - meaning that the list will not be reactive to added items (but it will still react to updates and deletes).
+
+A page fetched with `fetchPolicy: 'no-cache'` keeps its response in memory and breaks that consecutive cached sequence. Later cached pages retain item references, and the full query result includes the uncached page. Refresh respects each page's resolved fetch policy; switching a page to `no-cache` releases its previous cache ownership. Fetched and pushed `no-cache` rows still expose the wrapped item API, computed fields and cache-backed relations.
+
+With garbage collection enabled, cache writes that move root rows out of a filter or page slice do not release ownership held by the last fetched or pushed result. A replacement result or query disposal releases ownership; other live queries can keep shared rows. Accepted pushed cache writes also count as relevant writes for other queries' confirmed absence: a keyed `computed` miss can show that key again, and an unkeyed miss can show current matching cache data. Page versions order each page independently; they do not prevent another page's accepted item write from releasing absence.
+
+For example, if you fetch the pages 0 and 1, their respective `data` properties will be computed from the cache using `pageIndex` and `pageSize`. If you then fetch the page 3, its `data` property will also be computed from the cache, but the items will only be looked up by their keys stored in the page result and not dynamically from `pageIndex` and `pageSize`.
+
+If you need the full query result to preserve the exact order returned by the backend, use `resultMode: 'responseRefs'`. In that mode, rstore keeps the fetched list as refs and maps those refs back to cached items, so updates and deletes still stay reactive without recomputing the list from cache order.
+
+::: tip
+If you are using cursor-based pagination instead of index-based, you still need to pass the `pageIndex` and `pageSize` options so the pages are correctly stored in the `pages` ref and the `page.data` properties are correctly computed from the cache. In addition, you can pass your own custom parameters such as the cursor to the query options (see [Customizing Find Options Types](#customizing-find-options-types)).
+:::
+
+#### Pagination Example
+
+Here is the full example with navigation buttons:
+
+```vue
+<script setup lang="ts">
+const store = useStore()
+
+const pageSize = 10
+const pageIndex = ref(0)
+
+const { fetchMore, getPage }
+  = await store.messages.query(q => q.many({
+    pageIndex: 0,
+    pageSize,
+  }))
+
+const currentPage = computed(() => getPage({
+  pageIndex: pageIndex.value,
+}))
+
+watch(currentPage, (page) => {
+  if (pageIndex.value > 0 && !page.completed && !page.loading) {
+    fetchMore({
+      pageIndex: pageIndex.value,
+    })
+  }
+}, {
+  immediate: true,
+})
+</script>
+
+<template>
+  <UTable
+    :data="currentPage.data"
+    :loading="currentPage.loading"
+  />
+  <UAlert v-if="currentPage.error">
+    <template #title>
+      Error loading page: {{ currentPage.error.message }}
+    </template>
+  </UAlert>
+  <UButton
+    :disabled="pageIndex === 0"
+    @click="pageIndex--"
+  >
+    Previous Page
+  </UButton>
+  <UButton
+    :disabled="currentPage.loading || currentPage.data.length < pageSize"
+    @click="pageIndex++"
+  >
+    Next Page
+  </UButton>
+</template>
+```
+
+## Cache read
+
+### Peek first
+
+Read the first item that matches the key or the filter in the cache without doing any fetching.
+
+```ts
+const result = store.Todo.peekFirst('some-key')
+```
+
+With filtering:
+
+```ts
+const result = store.User.peekFirst({
+  filter: item => item.email === 'cat@acme.com',
+})
+```
+
+It can be used within a computed property or a watcher to reactively read an item from the cache:
+
+```ts
+const someKey = ref('some-key')
+
+const cachedTodo = computed(() => store.Todo.peekFirst(someKey.value))
+```
+
+### Peek many
+
+Read all items that match the (optional) filter in the cache without doing any fetching.
+
+```ts
+const todos = store.Todo.peekMany()
+
+const someUsers = store.User.peekMany({
+  filter: item => item.email.endsWith('@acme.com'),
+})
+```
+
+It can be used within a computed property or a watcher to reactively read items from the cache:
+
+```ts
+const email = ref('@acme.com')
+
+const cachedUsers = computed(() => store.User.peekMany({
+  filter: item => item.email.endsWith(email.value),
+}))
+```
+
+## Simple queries
+
+### Find first
+
+Find the first item that matches the key or the filter in the cache or fetches it if not found. The result is **not** reactive - the method is intended to be used for one-off queries. If you need the result to be reactive, use the `query` or `liveQuery` composables instead.
+
+```ts
+const todo = await store.Todo.findFirst('some-key')
+```
+With filtering:
+
+```ts
+const someUsers = await store.User.findFirst({
+  filter: item => item.email === 'cat@acme.com',
+  params: {
+    email: 'cat@acme.com',
+  },
+})
+```
+
+### Find many
+
+Find all items that match the (optional) filter in the cache or fetches them if not found. The result is **not** reactive - the method is intended to be used for one-off queries. If you need the result to be reactive, use the `query` or `liveQuery` composables instead.
+
+```ts
+const todos = await store.Todo.findMany()
+
+const someUsers = await store.User.findMany({
+  filter: item => item.email.endsWith('@acme.com'),
+  params: {
+    email: {
+      $like: '%@acme.com',
+    },
+  },
+})
+```
+
+## Batching <Badge text="New in v0.9" />
+
+When multiple `findFirst` calls (by key) happen in the same tick, rstore can combine them into a single request through a batch-aware plugin. See [Batching](./batching.md) for setup and plugin hooks.
+
+## Fetch Policy
+
+The fetch policy determines how the data is fetched from the server. The default fetch policy is `cache-first`, which means that the data is fetched from the cache first and then from the server if not found.
+
+The fetch policy can be set globally in the store or per query.
+
+### Global fetch policy
+
+The global fetch policy can be set in the store configuration using `findDefaults`:
+
+```ts
+const store = createStore({
+  schema,
+  plugins,
+  findDefaults: {
+    fetchPolicy: 'cache-first',
+  },
+})
+```
+
+### Per query fetch policy
+
+The fetch policy can be set per query using the `fetchPolicy` option:
+
+```ts
+const { data: todos } = store.Todo.query(q => q.many({
+  fetchPolicy: 'fetch-only',
+}))
+```
+
+### Possible fetch policies
+
+* `cache-first` (default) means that the query will first try to fetch the data from the cache. If the data is not found in the cache, it will fetch the data from the adapter plugins.
+* `cache-and-fetch` means that the query will first try to fetch the data from the cache. It will then fetch the data from the adapter plugins **in the background** and update the cache. Because cached data is displayed right away, `loading` stays `false` during that background fetch unless there is nothing cached to show - use `background.loading` for a discreet refresh indicator (see [Foreground and background fetch state](#foreground-and-background-fetch-state)).
+* `fetch-only` means that the query will only fetch the data from the adapter plugins. The data will be stored in the cache when the query is resolved.
+* `cache-only` means that the query will only fetch the data from the cache.
+* `no-cache` means that the query will not use the cache and only fetch the data from the adapter plugins. No data will be stored in the cache.
+
+## Items list
+
+A common pattern is to pass only the item key to row/item components, then query inside the row component. With the default `cache-first` fetch policy, those row queries read from cache and avoid extra requests per item.
+
+Benefits:
+- Data requirements stay co-located with each component.
+- Props stay simple (often just `id: string | number`).
+- Components are easier to reuse in other screens.
+
+::: code-group
+
+```vue [TodoList.vue]
+<script lang="ts" setup>
+const store = useStore()
+const { data: todos } = await store.Todo.query(q => q.many())
+</script>
+
+<template>
+  <!-- Only pass the id here -->
+  <TodoItem
+    v-for="{ id } in todos"
+    :id
+    :key="id"
+  />
+</template>
+```
+
+```vue [TodoItem.vue]
+<script lang="ts" setup>
+const props = defineProps<{
+  // Easy to type prop
+  id: string
+}>()
+
+const store = useStore()
+// No additional request is made here, the data is read from the cache
+const { data: todo } = await store.Todo.query(q => q.first(props.id))
+// Enjoy inferred types here too!
+</script>
+```
+
+:::
+
+## Co-locating queries
+
+You can co-locate queries with the components that use them while still benefiting from a centralized cache that deduplicates and synchronizes data across the app.
+
+::: code-group
+
+```vue [AppHeader.vue]
+<script lang="ts" setup>
+const store = useStore()
+// The query is co-located with the component, not in a store somewhere else
+const { data: user } = await store.User.query(q => q.first('user-id'))
+</script>
+
+<template>
+  <div>
+    <h1>{{ user.name }}</h1>
+  </div>
+</template>
+```
+
+```vue [UserProfile.vue]
+<script lang="ts" setup>
+const store = useStore()
+// The centralized cache ensures that the data is up to date here too
+const { data: user } = await store.User.query(q => q.first('user-id'))
+</script>
+
+<template>
+  <div>
+    <h1>{{ user.name }}</h1>
+    <p>{{ user.email }}</p>
+  </div>
+</template>
+```
+
+:::
+
+## Fetching relations
+
+You can pass an `include` option to the query to fetch related data. The `include` option is an object where the keys are the names of the relations. Learn more about how to define relations [here](../schema/relations.md).
+
+```ts
+const { data: comments } = store.comments.query(q => q.many({
+  include: {
+    author: true,
+    relatedPost: { // Nested relation
+      author: true,
+      topComments: true,
+    },
+  },
+}))
+```
+
+The cache will automatically resolve the relations as soon as the data is available in the cache.
+
+Plugins hooked on the `fetchRelations` hook will also be called to potentially fetch the data of the relations. See [Plugin hooks](../plugin/hooks.md#fetching-relations) for more details.
+
+## Default find options <Badge text="New in v0.8.3" />
+
+You can set default find options for all queries in the store by using the `findDefaults` option when creating the store:
+
+```ts
+const store = createStore({
+  schema,
+  plugins,
+  findDefaults: {
+    fetchPolicy: 'cache-and-fetch',
+    // Other default find options...
+  },
+})
+```
+
+## Customizing Find Options Types <Badge text="Changed in v0.7" type="warning" />
+
+You can customize the `FindOptions` type used in the `first` and `many` query builder methods and in the `peek*`/`find*` methods by declaring a module augmentation for `@rstore/vue` and extending the `FindOptions` interface.
+
+Create a `rstore.d.ts` file in your project with the following content:
+
+```ts
+declare module '@rstore/vue' {
+  export interface FindOptions<
+    TCollection extends Collection,
+    TCollectionDefaults extends CollectionDefaults,
+    TSchema extends StoreSchema,
+  > extends FindOptionsBase<TCollection, TCollectionDefaults, TSchema> {
+    // Your custom properties here
+
+    // For example, replace the `filter` property with a custom syntax
+    filter?: MyFilterSyntax
+  }
+}
+
+export {}
+```
+
+## Dynamic collection name <Badge text="New in v0.8.2" />
+
+You can access a collection with a dynamic name by using a string, a ref or a getter with the `$collection` method on the store instead of accessing it directly as a property.
+
+When the collection name changes, the query will automatically call its `refresh` method to fetch data from the new collection.
+
+Example with a ref:
+
+```ts
+const collectionName = ref('posts')
+
+const {
+  data: items
+} = await store.$collection(collectionName).query(q => q.many())
+
+// some time later...
+
+collectionName.value = 'comments'
+// The query will automatically refresh
+// to fetch the comments instead of the posts
+```
+
+Example with a getter:
+
+```ts
+const route = useRoute()
+
+const {
+  data: items
+} = await store.$collection(() => route.params.collectionName as string)
+  .query(q => q.many())
+// When the route changes, the query will automatically refresh
+// to fetch the new collection
+```
+
+If you do not need reactivity but still need a dynamic collection name, you can pass a plain string:
+
+```ts
+const query = await store.$collection('posts').query(q => q.many())
+```
+
+::: warning
+Using `$collection` will not provide type inference for the collection API. You will need to manually type the result if needed.
+:::

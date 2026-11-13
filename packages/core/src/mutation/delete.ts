@@ -1,0 +1,122 @@
+import type { BatchCallConfig, CacheLayer, Collection, CollectionDefaults, CustomHookMeta, GlobalStoreType, ResolvedCollection, StoreCore, StoreSchema } from '@rstore/shared'
+import { resolveBatchCall } from '../batch'
+import { reportOperationError } from '../utils/operationError'
+import { finalizeMutation } from './finalizeMutation'
+import { assertMutationAllowed, createOptimisticLayerLifecycle } from './optimistic'
+
+export interface DeleteOptions<
+  TCollection extends Collection,
+  TCollectionDefaults extends CollectionDefaults,
+  TSchema extends StoreSchema,
+> {
+  store: StoreCore<TSchema, TCollectionDefaults>
+  /** Metadata shared by all hooks belonging to this mutation. */
+  meta?: CustomHookMeta
+  collection: ResolvedCollection<TCollection, TCollectionDefaults, TSchema>
+  key: string | number
+  skipCache?: boolean
+  optimistic?: boolean
+
+  /**
+   * Whether this mutation should participate in batching.
+   * Only applies when store-level batching is enabled.
+   *
+   * - `false` — opt out of batching
+   * - `true` (or omitted) — join the default group
+   * - `{ group: 'name' }` — join a specific batch group
+   *
+   * @default true
+   */
+  batch?: BatchCallConfig
+}
+
+/** Delete one target through connector hooks and optimistic cache lifecycle. */
+export async function deleteItem<
+  TCollection extends Collection,
+  TCollectionDefaults extends CollectionDefaults,
+  TSchema extends StoreSchema,
+>({
+  store,
+  meta = {},
+  collection,
+  key,
+  skipCache,
+  optimistic = true,
+  batch,
+}: DeleteOptions<TCollection, TCollectionDefaults, TSchema>): Promise<void> {
+  const operation = {}
+  try {
+    assertMutationAllowed(store, collection, key, 'delete')
+
+    await store.$hooks.callHook('beforeMutation', {
+      operation,
+      store: store as unknown as GlobalStoreType,
+      meta,
+      collection,
+      mutation: 'delete',
+      key,
+      modifyItem: () => {},
+      setItem: () => {},
+    })
+
+    const optimisticLayer = createOptimisticLayerLifecycle(store)
+
+    if (!skipCache && optimistic) {
+      const layer: CacheLayer = {
+        id: crypto.randomUUID(),
+        collectionName: collection.name,
+        state: {},
+        deletedItems: new Set([key]),
+        optimistic: true,
+      }
+      optimisticLayer.add(layer)
+    }
+
+    try {
+      // Batching: enqueue into batch scheduler if eligible
+      const batchCall = resolveBatchCall(batch)
+      if (store.$batch?.options.mutations && batchCall.enabled) {
+        await store.$batch.enqueueDelete(collection, key, meta, batchCall.group)
+      }
+      else {
+        const abort = store.$hooks.withAbort({ explicit: true })
+        await store.$hooks.callHook('deleteItem', {
+          store: store as unknown as GlobalStoreType,
+          meta,
+          collection,
+          key,
+          abort,
+        }, abort)
+      }
+
+      await finalizeMutation(store, {
+        operation,
+        meta,
+        collection,
+        mutation: 'delete',
+        key,
+        skipCache,
+      }, {
+        onBeforeApplyCache: optimisticLayer.remove,
+      })
+    }
+    catch (error) {
+      // Rollback optimistic layer in case of error
+      optimisticLayer.remove()
+      throw error
+    }
+  }
+  catch (error) {
+    reportOperationError(store.$hooks, 'mutationError', {
+      operation,
+      store: store as unknown as GlobalStoreType,
+      meta,
+      collection,
+      mutation: 'delete',
+      many: false,
+      key,
+      error,
+    })
+    throw error
+  }
+}

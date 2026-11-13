@@ -1,0 +1,5 @@
+*
+!.gitignore
+!.npmignore
+!rstore-nuxt-drizzle
+!rstore-nuxt-drizzle/**

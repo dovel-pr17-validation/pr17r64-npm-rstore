@@ -1,0 +1,47 @@
+{
+  "name": "@rstore/core",
+  "type": "module",
+  "version": "0.8.4",
+  "description": "Reactive Store",
+  "repository": {
+    "url": "https://github.com/Akryum/rstore.git",
+    "type": "git",
+    "directory": "packages/core"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "unbuild",
+    "dev": "unbuild --stub && printf \"export * from '../src/index'\" > ./dist/index.mjs",
+    "test:types": "tsrs --noEmit"
+  },
+  "dependencies": {
+    "@rstore/shared": "workspace:^",
+    "klona": "^2.0.6"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "unbuild": "catalog:",
+    "vitest": "catalog:"
+  }
+}

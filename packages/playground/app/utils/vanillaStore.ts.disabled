@@ -1,0 +1,126 @@
+import type { StoreSchema } from '@rstore/shared'
+import type { InjectionKey } from 'vue'
+import { withItemType, type VueStore } from '@rstore/vue'
+import { formatTimeAgo } from '@vueuse/core'
+
+const reactiveTime = useTimestamp()
+const getTime = () => import.meta.server ? Date.now() : reactiveTime.value
+
+const Todo = withItemType<Todo>().defineCollection({
+  name: 'Todo',
+  formSchema: {
+    create: createValidationSchemas.todos,
+    update: updateValidationSchemas.todos,
+  },
+  meta: {
+    path: 'todos',
+  },
+} as const)
+
+const User = withItemType<User>().defineCollection({
+  name: 'User',
+  relations: {
+    receivedMessages: {
+      to: {
+        Message: {
+          on: 'recipientId',
+          eq: 'id',
+        },
+      },
+      many: true,
+    },
+    sentMessages: {
+      to: {
+        Message: {
+          on: 'authorId',
+          eq: 'id',
+        },
+      },
+      many: true,
+    },
+  },
+  meta: {
+    path: 'users',
+  },
+} as const)
+
+const Bot = withItemType<Bot>().defineCollection({
+  name: 'Bot',
+  relations: {
+    receivedMessages: {
+      to: {
+        Message: {
+          on: 'recipientId',
+          eq: 'id',
+        },
+      },
+      many: true,
+    },
+    sentMessages: {
+      to: {
+        Message: {
+          on: 'authorId',
+          eq: 'id',
+        },
+      },
+      many: true,
+    },
+  },
+  meta: {
+    path: 'bots',
+  },
+} as const)
+
+const Message = withItemType<Message>().defineCollection({
+  name: 'Message',
+  relations: {
+    author: {
+      to: {
+        User: {
+          on: 'id',
+          eq: 'authorId',
+        },
+        Bot: {
+          on: 'id',
+          eq: 'authorId',
+        },
+      },
+    },
+    recipient: {
+      to: {
+        User: {
+          on: 'id',
+          eq: 'recipientId',
+        },
+        Bot: {
+          on: 'id',
+          eq: 'recipientId',
+        },
+      },
+    },
+  },
+  computed: {
+    extract: message => `${message.text.slice(0, 10)}... (+${message.text.length - 10} chars)`,
+    timeAgo: message => formatTimeAgo(message.createdAt, {}, getTime()),
+  },
+  meta: {
+    path: 'messages',
+  },
+} as const)
+
+export const vanillaCollection = {
+  Todo,
+  User,
+  Bot,
+  Message,
+} as const satisfies StoreSchema
+
+export const vanillaStoreKey = Symbol('vanillaStore') as InjectionKey<VueStore<typeof vanillaCollection>>
+
+export function useVanillaStore() {
+  const store = inject(vanillaStoreKey, null)
+  if (store === null) {
+    throw new Error('No vanillaStore provided.')
+  }
+  return store
+}
