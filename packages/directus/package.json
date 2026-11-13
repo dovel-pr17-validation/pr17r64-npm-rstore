@@ -44,7 +44,7 @@
     "test:types": "tsrs --noEmit"
   },
   "dependencies": {
-    "@directus/sdk": "^19.0.1",
+    "@directus/sdk": "^27.1.0",
     "@rstore/connector-toolkit": "workspace:^",
     "@rstore/core": "workspace:^",
     "@rstore/shared": "workspace:^"

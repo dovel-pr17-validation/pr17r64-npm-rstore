@@ -365,8 +365,8 @@ importers:
   packages/directus:
     dependencies:
       '@directus/sdk':
-        specifier: ^19.0.1
-        version: 19.1.0
+        specifier: ^27.1.0
+        version: 27.1.0
       '@rstore/connector-toolkit':
         specifier: workspace:^
         version: link:../connector-toolkit
@@ -947,8 +947,8 @@ importers:
   packages/playground-nuxt-directus:
     dependencies:
       '@directus/sdk':
-        specifier: ^19.0.1
-        version: 19.1.0
+        specifier: ^27.1.0
+        version: 27.1.0
       '@rstore/nuxt-directus':
         specifier: workspace:*
         version: link:../nuxt-directus
@@ -1427,8 +1427,8 @@ packages:
     peerDependencies:
       devframe: 1.2.2
 
-  '@directus/sdk@19.1.0':
-    resolution: {integrity: sha512-Nqem9BsvvGyVtAa69mGPtoMoMVkZxdIREdsWvvTzNF4/1XqaFfEiFL7PhtUNfc46/Nufus2+QUKYQbNiAWe3ZA==}
+  '@directus/sdk@27.1.0':
+    resolution: {integrity: sha512-dPuhb6DOJfTHlh9fbe0wQeUJLpjwVIA3rhVkRotcNL3IBFbnzgTxZhz5kt6CP+UK3TLfpC0erkKYszBXj7yolg==}
     engines: {node: '>=22'}
 
   '@docsearch/css@4.7.0':
@@ -9631,7 +9631,7 @@ snapshots:
       - crossws
       - ocache
 
-  '@directus/sdk@19.1.0': {}
+  '@directus/sdk@27.1.0': {}
 
   '@docsearch/css@4.7.0': {}
 
